@@ -8,6 +8,14 @@ European Central Bank, refreshed once per business day.
 Cache: 60s in-process dict, keyed by base currency. Rates only refresh
 once a day at the source, so 60s is more than enough granularity for
 free-tier traffic and keeps us well under any reasonable rate limit.
+
+Access control (2026-06-11): when RAPIDAPI_PROXY_SECRET is set, /rates
+requires the X-RapidAPI-Proxy-Secret header to match it. RapidAPI's proxy
+injects this header on every request it forwards, so direct hits to the
+public Render URL (which lack the header) get 401 — keeping paid traffic
+metered through RapidAPI. /health and / stay open for monitoring + warm-up.
+If the env var is unset (local dev), the check is skipped so local testing
+and the RapidAPI warm-up still work.
 """
 import logging
 import os
@@ -27,6 +35,25 @@ CACHE_TTL_SECONDS = 60
 # Endpoint format: https://api.frankfurter.dev/v1/latest?base=USD
 FX_API_URL = "https://api.frankfurter.dev/v1/latest"
 FX_API_TIMEOUT_SECONDS = 5
+
+# RapidAPI proxy-secret gate. When set, /rates requires a matching header.
+RAPIDAPI_PROXY_SECRET = os.environ.get("RAPIDAPI_PROXY_SECRET", "")
+if not RAPIDAPI_PROXY_SECRET:
+    log.warning(
+        "RAPIDAPI_PROXY_SECRET not set — /rates is OPEN (no proxy-secret gate). "
+        "Set it in the Render env to require RapidAPI-proxied access."
+    )
+
+
+def _rapidapi_authorized() -> bool:
+    """True if the request may access /rates.
+
+    Fail-open when no secret is configured (local dev). When a secret IS
+    configured, require the X-RapidAPI-Proxy-Secret header to match exactly.
+    """
+    if not RAPIDAPI_PROXY_SECRET:
+        return True
+    return request.headers.get("X-RapidAPI-Proxy-Secret", "") == RAPIDAPI_PROXY_SECRET
 
 
 @app.get("/")
@@ -80,6 +107,11 @@ def get_live_rates(base_currency: str):
 
 @app.get("/rates")
 def rates():
+    if not _rapidapi_authorized():
+        return jsonify(
+            error="Unauthorized. Access this API through RapidAPI.",
+            hub="https://rapidapi.com",
+        ), 401
     base = request.args.get("base", "USD").upper()
     live = get_live_rates(base)
     if live is None:
