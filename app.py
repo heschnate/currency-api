@@ -70,6 +70,13 @@ def health():
     return jsonify(ok=True, service="currency-api")
 
 
+@app.get("/ping")
+def ping():
+    # RapidAPI's built-in health check pings /ping. Open (no proxy gate),
+    # same payload as /health.
+    return jsonify(ok=True, service="currency-api")
+
+
 def get_live_rates(base_currency: str):
     """Fetch live FX rates from Frankfurter, with 60s in-memory cache.
 
